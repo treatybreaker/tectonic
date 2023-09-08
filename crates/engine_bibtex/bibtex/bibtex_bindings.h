@@ -15,6 +15,8 @@
 
 #define HASH_BASE 1
 
+
+
 typedef enum {
   BUF_TY_BASE,
   BUF_TY_SV,
@@ -70,39 +72,33 @@ typedef enum {
   SCAN_RES_WHITESPACE_ADJACENT = 3,
 } ScanRes;
 
-typedef enum {
-  STK_TYPE_INTEGER = 0,
-  STK_TYPE_STRING = 1,
-  STK_TYPE_FUNCTION = 2,
-  STK_TYPE_MISSING = 3,
-  STK_TYPE_ILLEGAL = 4,
-} StkType;
-
 enum StrIlk
 #ifdef __cplusplus
   : uint8_t
 #endif // __cplusplus
  {
-  StrIlk_Text = 0,
-  StrIlk_Integer = 1,
-  StrIlk_AuxCommand = 2,
-  StrIlk_AuxFile = 3,
-  StrIlk_BstCommand = 4,
-  StrIlk_BstFile = 5,
-  StrIlk_BibFile = 6,
-  StrIlk_FileExt = 7,
-  StrIlk_Cite = 9,
-  StrIlk_LcCite = 10,
-  StrIlk_BstFn = 11,
-  StrIlk_BibCommand = 12,
-  StrIlk_Macro = 13,
-  StrIlk_ControlSeq = 14,
+  STR_ILK_TEXT = 0,
+  STR_ILK_INTEGER = 1,
+  STR_ILK_AUX_COMMAND = 2,
+  STR_ILK_AUX_FILE = 3,
+  STR_ILK_BST_COMMAND = 4,
+  STR_ILK_BST_FILE = 5,
+  STR_ILK_BIB_FILE = 6,
+  STR_ILK_FILE_EXT = 7,
+  STR_ILK_CITE = 9,
+  STR_ILK_LC_CITE = 10,
+  STR_ILK_BST_FN = 11,
+  STR_ILK_BIB_COMMAND = 12,
+  STR_ILK_MACRO = 13,
+  STR_ILK_CONTROL_SEQ = 14,
 };
 #ifndef __cplusplus
 typedef uint8_t StrIlk;
 #endif // __cplusplus
 
 typedef struct PeekableInput PeekableInput;
+
+typedef struct XBuf_ExecVal XBuf_ExecVal;
 
 typedef uintptr_t StrNumber;
 
@@ -168,8 +164,6 @@ typedef uintptr_t BibNumber;
 
 typedef uintptr_t CiteNumber;
 
-typedef uintptr_t HashPointer2;
-
 typedef struct {
   CiteNumber cite_loc;
   CiteNumber lc_cite_loc;
@@ -178,28 +172,18 @@ typedef struct {
 } FindCiteLocs;
 
 typedef struct {
-  StkType typ;
-  int32_t lit;
-} ExecVal;
-
-typedef struct {
   Bibtex *glbl_ctx;
   HashPointer _default;
-  ExecVal pop1;
-  ExecVal pop2;
-  ExecVal pop3;
-  ExecVal *lit_stack;
-  uintptr_t lit_stk_size;
+  XBuf_ExecVal *lit_stack;
   uintptr_t lit_stk_ptr;
   bool mess_with_entries;
+  /**
+   * Pointer to the current top of the string pool, used to optimized certain string operations
+   */
   StrNumber bib_str_ptr;
 } ExecCtx;
 
 typedef uintptr_t FieldLoc;
-
-typedef uintptr_t WizFnLoc;
-
-typedef uintptr_t FnDefLoc;
 
 typedef uintptr_t PoolPointer;
 
@@ -229,6 +213,21 @@ typedef struct {
   };
 } CResultLookup;
 
+typedef enum {
+  CResultBool_Error,
+  CResultBool_Recover,
+  CResultBool_Ok,
+} CResultBool_Tag;
+
+typedef struct {
+  CResultBool_Tag tag;
+  union {
+    struct {
+      bool ok;
+    };
+  };
+} CResultBool;
+
 
 
 #ifdef __cplusplus
@@ -236,8 +235,6 @@ extern "C" {
 #endif // __cplusplus
 
 extern const LexClass LEX_CLASS[256];
-
-extern const int32_t CHAR_WIDTH[256];
 
 void reset_all(void);
 
@@ -279,19 +276,13 @@ void set_bib_ptr(BibNumber num);
 
 void check_bib_files(BibNumber ptr);
 
-void add_preamble(StrNumber num);
-
-StrNumber cur_preamble(void);
-
 BibNumber preamble_ptr(void);
-
-void set_preamble_ptr(BibNumber num);
 
 int32_t bib_line_num(void);
 
 void set_bib_line_num(int32_t num);
 
-uintptr_t bib_buf_size(void);
+bool eat_bib_white_space(void);
 
 ASCIICode bib_buf(BufTy ty, BufPointer pos);
 
@@ -307,17 +298,7 @@ BufPointer bib_buf_len(BufTy ty);
 
 void bib_set_buf_len(BufTy ty, BufPointer len);
 
-void buffer_overflow(void);
-
-BufPointer name_tok(BufPointer pos);
-
-void set_name_tok(BufPointer pos, BufPointer val);
-
 void lower_case(BufTy buf, BufPointer ptr, BufPointer len);
-
-void upper_case(BufTy buf, BufPointer ptr, BufPointer len);
-
-BufPointer int_to_ascii(int32_t the_int, BufTy int_buf, BufPointer int_begin);
 
 void quick_sort(CiteNumber left_end, CiteNumber right_end);
 
@@ -337,9 +318,9 @@ StrNumber cite_info(CiteNumber num);
 
 void set_cite_info(CiteNumber num, StrNumber info);
 
-HashPointer2 type_list(CiteNumber num);
+HashPointer type_list(CiteNumber num);
 
-void set_type_list(CiteNumber num, HashPointer2 ty);
+void set_type_list(CiteNumber num, HashPointer ty);
 
 bool entry_exists(CiteNumber num);
 
@@ -377,49 +358,21 @@ uintptr_t num_ent_strs(void);
 
 void set_num_ent_strs(uintptr_t val);
 
-int32_t entry_ints(int32_t pos);
+ExecCtx init_exec_ctx(Bibtex *glbl_ctx);
 
-void set_entry_ints(int32_t pos, int32_t val);
+CResult print_bst_name(const Bibtex *glbl_ctx);
 
-ASCIICode entry_strs(int32_t pos);
+void init_command_execution(ExecCtx *ctx);
 
-void set_entry_strs(int32_t pos, ASCIICode val);
+CResult check_command_execution(ExecCtx *ctx);
 
-bool print_lit(ExecVal val);
-
-bool print_stk_lit(ExecVal val);
-
-bool print_wrong_stk_lit(ExecCtx *ctx, ExecVal val, StkType typ2);
-
-bool bst_ex_warn_print(const ExecCtx *ctx);
-
-bool bst_ln_num_print(const Bibtex *glbl_ctx);
-
-bool print_bst_name(const Bibtex *glbl_ctx);
-
-void push_lit_stk(ExecCtx *ctx, ExecVal val);
-
-bool pop_lit_stk(ExecCtx *ctx, ExecVal *out);
+CResult execute_fn(ExecCtx *ctx, HashPointer ex_fn_loc);
 
 int32_t num_glb_strs(void);
 
 void set_num_glb_strs(int32_t val);
 
 void check_grow_global_strs(void);
-
-uintptr_t glb_bib_str_ptr(uintptr_t pos);
-
-void set_glb_bib_str_ptr(uintptr_t pos, uintptr_t val);
-
-ASCIICode global_strs(uintptr_t pos);
-
-void set_global_strs(uintptr_t pos, ASCIICode val);
-
-int32_t glb_str_end(uintptr_t pos);
-
-void set_glb_str_end(uintptr_t pos, int32_t val);
-
-uintptr_t end_of_def(void);
 
 uintptr_t undefined(void);
 
@@ -441,8 +394,6 @@ History get_history(void);
 
 void mark_warning(void);
 
-void mark_error(void);
-
 uint32_t err_count(void);
 
 bool init_standard_output(void);
@@ -461,15 +412,15 @@ void print_confusion(void);
 
 void print_a_token(void);
 
-bool print_a_pool_str(StrNumber s);
+CResult print_a_pool_str(StrNumber s);
 
-bool print_aux_name(void);
+CResult print_aux_name(void);
 
-bool log_pr_aux_name(void);
+CResult log_pr_aux_name(void);
 
-bool aux_err_print(void);
+CResult aux_err_print(void);
 
-bool aux_err_illegal_another_print(int32_t cmd_num);
+CResult aux_err_illegal_another_print(int32_t cmd_num);
 
 void aux_err_no_right_brace_print(void);
 
@@ -479,61 +430,45 @@ void aux_err_white_space_in_argument_print(void);
 
 void aux_end1_err_print(void);
 
-bool aux_end2_err_print(void);
+CResult aux_end2_err_print(void);
 
-bool print_bib_name(void);
+CResult print_bib_name(void);
 
-bool log_pr_bib_name(void);
+CResult log_pr_bib_name(void);
 
-bool log_pr_bst_name(const Bibtex *ctx);
+CResult log_pr_bst_name(const Bibtex *ctx);
 
 void hash_cite_confusion(void);
 
-bool bst_warn_print(const Bibtex *ctx);
+CResult bst_warn_print(const Bibtex *ctx);
 
 void eat_bst_print(void);
 
-void unknwn_function_class_confusion(void);
-
-bool bst_id_print(ScanRes scan_result);
+CResult bst_id_print(ScanRes scan_result);
 
 void bst_left_brace_print(void);
 
 void bst_right_brace_print(void);
 
-bool bib_err_print(bool at_bib_command);
+CResult bib_err_print(bool at_bib_command);
 
-bool bib_warn_print(void);
+CResult bib_warn_print(void);
 
-bool eat_bib_print(bool at_bib_command);
+CResult eat_bib_print(bool at_bib_command);
 
-bool bib_one_of_two_print(ASCIICode char1, ASCIICode char2, bool at_bib_command);
+CResult bib_one_of_two_print(ASCIICode char1, ASCIICode char2, bool at_bib_command);
 
-bool bib_equals_sign_print(bool at_bib_command);
+CResult bib_equals_sign_print(bool at_bib_command);
 
-bool bib_unbalanced_braces_print(bool at_bib_command);
-
-void macro_warn_print(void);
-
-bool bib_id_print(ScanRes scan_res);
+CResult bib_id_print(ScanRes scan_res);
 
 void bib_cmd_confusion(void);
 
 void cite_key_disappeared_confusion(void);
 
-bool bad_cross_reference_print(StrNumber s);
+CResult bad_cross_reference_print(StrNumber s);
 
-bool print_missing_entry(StrNumber s);
-
-bool bst_cant_mess_with_entries_print(const ExecCtx *ctx);
-
-void bst_1print_string_size_exceeded(void);
-
-bool bst_2print_string_size_exceeded(const ExecCtx *ctx);
-
-bool braces_unbalanced_complaint(const ExecCtx *ctx, StrNumber pop_lit_var);
-
-void case_conversion_confusion(void);
+CResult print_missing_entry(StrNumber s);
 
 void print_fn_class(HashPointer fn_loc);
 
@@ -541,19 +476,7 @@ CResult bst_err_print_and_look_for_blank_line(Bibtex *ctx);
 
 CResult already_seen_function_print(Bibtex *ctx, HashPointer seen_fn_loc);
 
-bool nonexistent_cross_reference_error(FieldLoc field_ptr);
-
-void output_bbl_line(Bibtex *ctx);
-
-HashPointer2 wiz_functions(WizFnLoc pos);
-
-void set_wiz_functions(WizFnLoc pos, HashPointer2 val);
-
-WizFnLoc wiz_def_ptr(void);
-
-void set_wiz_def_ptr(WizFnLoc val);
-
-void check_grow_wiz(FnDefLoc ptr);
+CResult nonexistent_cross_reference_error(FieldLoc field_ptr);
 
 StrNumber field_info(FieldLoc pos);
 
@@ -579,13 +502,7 @@ bool tectonic_eof(PeekableInput *peekable);
 
 bool input_ln(PeekableInput *peekable);
 
-bool bib_str_eq_str(StrNumber s1, StrNumber s2);
-
-void pool_overflow(void);
-
 ASCIICode bib_str_pool(PoolPointer idx);
-
-void bib_set_str_pool(PoolPointer idx, ASCIICode code);
 
 StrNumber bib_str_ptr(void);
 
@@ -595,15 +512,9 @@ PoolPointer bib_str_start(StrNumber s);
 
 void bib_set_str_start(StrNumber s, PoolPointer ptr);
 
-uintptr_t bib_pool_size(void);
-
 uintptr_t bib_max_strings(void);
 
-PoolPointer bib_pool_ptr(void);
-
 void bib_set_pool_ptr(PoolPointer ptr);
-
-CResultStr bib_make_string(void);
 
 CResultLookup str_lookup(BufTy buf, BufPointer ptr, BufPointer len, StrIlk ilk, bool insert);
 
@@ -613,21 +524,24 @@ bool scan1(ASCIICode char1);
 
 bool scan1_white(ASCIICode char1);
 
-bool scan2(ASCIICode char1, ASCIICode char2);
-
 bool scan2_white(ASCIICode char1, ASCIICode char2);
-
-bool scan3(ASCIICode char1, ASCIICode char2, ASCIICode char3);
 
 bool scan_alpha(void);
 
-bool scan_white_space(void);
-
 ScanRes scan_identifier(ASCIICode char1, ASCIICode char2, ASCIICode char3);
 
-bool scan_nonneg_integer(void);
+bool eat_bst_white_space(Bibtex *ctx);
 
-bool scan_integer(int32_t *token_value);
+CResult scan_fn_def(Bibtex *ctx, HashPointer fn_hash_loc, HashPointer wiz_loc);
+
+CResultBool scan_and_store_the_field_value_and_eat_white(Bibtex *ctx,
+                                                         bool store_field,
+                                                         bool at_bib_command,
+                                                         int32_t command_num,
+                                                         CiteNumber *cite_out,
+                                                         HashPointer cur_macro_loc,
+                                                         ASCIICode right_outer_delim,
+                                                         HashPointer field_name_loc);
 
 #ifdef __cplusplus
 } // extern "C"

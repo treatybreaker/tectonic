@@ -1,11 +1,11 @@
-use crate::c_api::{xbuf::XBuf, FieldLoc, FnDefLoc, HashPointer2, StrNumber, WizFnLoc};
+use crate::c_api::{xbuf::XBuf, FieldLoc, FnDefLoc, HashPointer, StrNumber, WizFnLoc};
 use std::cell::RefCell;
 
 const WIZ_FN_SPACE: usize = 3000;
 const MAX_FIELDS: usize = 17250;
 
 pub struct OtherData {
-    wiz_functions: XBuf<HashPointer2>,
+    wiz_functions: XBuf<HashPointer>,
     wiz_def_ptr: WizFnLoc,
     field_info: XBuf<StrNumber>,
     num_fields: FieldLoc,
@@ -25,8 +25,16 @@ impl OtherData {
         }
     }
 
+    pub fn max_fields(&self) -> usize {
+        self.field_info.len()
+    }
+
     pub fn field(&self, pos: usize) -> StrNumber {
         self.field_info[pos]
+    }
+
+    pub fn set_field(&mut self, pos: usize, s: StrNumber) {
+        self.field_info[pos] = s
     }
 
     pub fn num_fields(&self) -> FieldLoc {
@@ -47,8 +55,34 @@ impl OtherData {
         }
     }
 
+    pub fn crossref_num(&self) -> FieldLoc {
+        self.crossref_num
+    }
+
     pub fn set_crossref_num(&mut self, val: FieldLoc) {
         self.crossref_num = val;
+    }
+
+    pub fn wiz_function(&self, pos: usize) -> HashPointer {
+        self.wiz_functions[pos]
+    }
+
+    pub fn set_wiz_function(&mut self, pos: usize, val: HashPointer) {
+        self.wiz_functions[pos] = val
+    }
+
+    pub fn wiz_def_ptr(&self) -> WizFnLoc {
+        self.wiz_def_ptr
+    }
+
+    pub fn set_wiz_def_ptr(&mut self, ptr: WizFnLoc) {
+        self.wiz_def_ptr = ptr;
+    }
+
+    pub fn check_wiz_overflow(&mut self, ptr: FnDefLoc) {
+        while ptr + self.wiz_def_ptr > self.wiz_functions.len() {
+            self.wiz_functions.grow(WIZ_FN_SPACE)
+        }
     }
 }
 
@@ -66,35 +100,6 @@ pub fn with_other<T>(f: impl FnOnce(&OtherData) -> T) -> T {
 
 pub fn with_other_mut<T>(f: impl FnOnce(&mut OtherData) -> T) -> T {
     OTHER.with(|other| f(&mut other.borrow_mut()))
-}
-
-#[no_mangle]
-pub extern "C" fn wiz_functions(pos: WizFnLoc) -> HashPointer2 {
-    with_other(|other| other.wiz_functions[pos])
-}
-
-#[no_mangle]
-pub extern "C" fn set_wiz_functions(pos: WizFnLoc, val: HashPointer2) {
-    with_other_mut(|other| other.wiz_functions[pos] = val)
-}
-
-#[no_mangle]
-pub extern "C" fn wiz_def_ptr() -> WizFnLoc {
-    with_other(|other| other.wiz_def_ptr)
-}
-
-#[no_mangle]
-pub extern "C" fn set_wiz_def_ptr(val: WizFnLoc) {
-    with_other_mut(|other| other.wiz_def_ptr = val)
-}
-
-#[no_mangle]
-pub extern "C" fn check_grow_wiz(ptr: FnDefLoc) {
-    with_other_mut(|other| {
-        while ptr + other.wiz_def_ptr > other.wiz_functions.len() {
-            other.wiz_functions.grow(WIZ_FN_SPACE)
-        }
-    })
 }
 
 #[no_mangle]

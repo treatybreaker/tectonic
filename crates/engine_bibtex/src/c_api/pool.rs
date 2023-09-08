@@ -1,21 +1,24 @@
 use crate::{
     c_api::{
-        buffer::{with_buffers, BufTy},
+        buffer::{with_buffers, BufTy, GlobalBuffer},
+        char_info::LexClass,
         entries::{with_entries_mut, ENT_STR_SIZE},
         global::GLOB_STR_SIZE,
         hash,
         hash::{with_hash, with_hash_mut, FnClass, HashData},
-        log::{print_overflow, write_logs},
+        log::{output_bbl_line, print_overflow, write_logs},
         other::with_other_mut,
         xbuf::XBuf,
-        ASCIICode, Bibtex, BufPointer, CResult, CResultLookup, CResultStr, HashPointer, LookupRes,
-        PoolPointer, StrIlk, StrNumber,
+        ASCIICode, Bibtex, BufPointer, CResult, CResultLookup, HashPointer, LookupRes, PoolPointer,
+        StrIlk, StrNumber,
     },
     BibtexError,
 };
-use std::cell::RefCell;
+use std::{cell::RefCell, ops::Range};
 
 const POOL_SIZE: usize = 65000;
+pub(crate) const MAX_PRINT_LINE: usize = 79;
+pub(crate) const MIN_PRINT_LINE: usize = 3;
 pub(crate) const MAX_STRINGS: usize = 35307;
 
 #[derive(Debug, PartialEq)]
@@ -34,7 +37,7 @@ pub struct StringPool {
 }
 
 impl StringPool {
-    fn new() -> StringPool {
+    pub(crate) fn new() -> StringPool {
         StringPool {
             strings: XBuf::new(POOL_SIZE),
             offsets: XBuf::new(MAX_STRINGS),
@@ -67,15 +70,15 @@ impl StringPool {
 
     /// Used while defining strings - declare the current `pool_ptr` as the end of the current
     /// string, increment the `str_ptr`, and return the new string's `StrNumber`
-    fn make_string(&mut self) -> CResultStr {
+    pub fn make_string(&mut self) -> Result<StrNumber, BibtexError> {
         if self.str_ptr == MAX_STRINGS {
             print_overflow();
             write_logs(&format!("number of strings {}\n", MAX_STRINGS));
-            return CResultStr::Error;
+            return Err(BibtexError::Fatal);
         }
         self.str_ptr += 1;
         self.offsets[self.str_ptr] = self.pool_ptr;
-        CResultStr::Ok(self.str_ptr - 1)
+        Ok(self.str_ptr - 1)
     }
 
     fn hash_str(hash: &HashData, str: &[ASCIICode]) -> usize {
@@ -139,7 +142,7 @@ impl StringPool {
                         if hash.used() == hash::HASH_BASE {
                             print_overflow();
                             write_logs(&format!("hash size {}\n", hash::HASH_SIZE));
-                            return Err(BibtexError);
+                            return Err(BibtexError::Fatal);
                         }
                         hash.set_used(hash.used() - 1);
 
@@ -161,8 +164,8 @@ impl StringPool {
                     self.pool_ptr += str.len();
 
                     match self.make_string() {
-                        CResultStr::Ok(str) => hash.set_text(p, str),
-                        _ => return Err(BibtexError),
+                        Ok(str) => hash.set_text(p, str),
+                        Err(err) => return Err(err),
                     }
                 }
 
@@ -176,6 +179,68 @@ impl StringPool {
 
             p = hash.next(p);
         }
+    }
+
+    pub fn str_ptr(&self) -> usize {
+        self.str_ptr
+    }
+
+    pub fn set_str_ptr(&mut self, val: usize) {
+        self.str_ptr = val;
+    }
+
+    pub fn pool_ptr(&self) -> usize {
+        self.pool_ptr
+    }
+
+    pub fn set_pool_ptr(&mut self, val: usize) {
+        self.pool_ptr = val;
+    }
+
+    pub fn str_start(&self, str: StrNumber) -> usize {
+        self.offsets[str]
+    }
+
+    // TODO: Encapsulate better
+    pub fn set_start(&mut self, str: StrNumber, start: usize) {
+        self.offsets[str] = start;
+    }
+
+    pub fn copy_raw(&mut self, str: StrNumber, pos: usize) {
+        let start = self.offsets[str];
+        let end = self.offsets[str + 1];
+
+        while pos + (end - start) > self.strings.len() {
+            self.grow();
+        }
+
+        self.strings.copy_within(start..end, pos);
+    }
+
+    pub fn copy_range_raw(&mut self, range: Range<usize>, pos: usize) {
+        while pos + (range.end - range.start) > self.strings.len() {
+            self.grow();
+        }
+        self.strings.copy_within(range, pos)
+    }
+
+    pub fn append(&mut self, c: ASCIICode) {
+        self.strings[self.pool_ptr] = c;
+        self.pool_ptr += 1;
+    }
+
+    pub fn add_string_raw(&mut self, str: &[ASCIICode]) -> Result<PoolPointer, BibtexError> {
+        while self.pool_ptr + str.len() > self.strings.len() {
+            self.grow();
+        }
+        self.strings[self.pool_ptr..self.pool_ptr + str.len()].copy_from_slice(str);
+        self.pool_ptr += str.len();
+        self.make_string()
+    }
+
+    #[allow(clippy::len_without_is_empty)]
+    pub fn len(&self) -> usize {
+        self.strings.len()
     }
 }
 
@@ -196,23 +261,8 @@ pub fn with_pool_mut<T>(f: impl FnOnce(&mut StringPool) -> T) -> T {
 }
 
 #[no_mangle]
-pub extern "C" fn bib_str_eq_str(s1: StrNumber, s2: StrNumber) -> bool {
-    with_pool(|pool| pool.get_str(s1) == pool.get_str(s2))
-}
-
-#[no_mangle]
-pub extern "C" fn pool_overflow() {
-    with_pool_mut(|pool| pool.grow());
-}
-
-#[no_mangle]
 pub extern "C" fn bib_str_pool(idx: PoolPointer) -> ASCIICode {
     with_pool(|pool| pool.strings[idx])
-}
-
-#[no_mangle]
-pub extern "C" fn bib_set_str_pool(idx: PoolPointer, code: ASCIICode) {
-    with_pool_mut(|pool| pool.strings[idx] = code)
 }
 
 #[no_mangle]
@@ -236,18 +286,8 @@ pub extern "C" fn bib_set_str_start(s: StrNumber, ptr: PoolPointer) {
 }
 
 #[no_mangle]
-pub extern "C" fn bib_pool_size() -> usize {
-    with_pool(|pool| pool.strings.len())
-}
-
-#[no_mangle]
 pub extern "C" fn bib_max_strings() -> usize {
     MAX_STRINGS
-}
-
-#[no_mangle]
-pub extern "C" fn bib_pool_ptr() -> PoolPointer {
-    with_pool(|pool| pool.pool_ptr)
 }
 
 #[no_mangle]
@@ -255,9 +295,17 @@ pub extern "C" fn bib_set_pool_ptr(ptr: PoolPointer) {
     with_pool_mut(|pool| pool.pool_ptr = ptr)
 }
 
-#[no_mangle]
-pub extern "C" fn bib_make_string() -> CResultStr {
-    with_pool_mut(|pool| pool.make_string())
+pub fn add_buf_pool(pool: &mut StringPool, buffers: &mut GlobalBuffer, str: StrNumber) {
+    let str = pool.get_str(str);
+
+    if buffers.init(BufTy::Ex) + str.len() > buffers.len() {
+        buffers.grow_all();
+    }
+
+    let start = buffers.init(BufTy::Ex);
+    buffers.copy_from(BufTy::Ex, start, str);
+    buffers.set_offset(BufTy::Ex, 1, start + str.len());
+    buffers.set_init(BufTy::Ex, start + str.len());
 }
 
 #[no_mangle]
@@ -283,7 +331,7 @@ pub extern "C" fn str_lookup(
 #[no_mangle]
 pub unsafe extern "C" fn pre_def_certain_strings(ctx: *mut Bibtex) -> CResult {
     let ctx = &mut *ctx;
-    let res = with_hash_mut(|hash| {
+    let res: Result<_, BibtexError> = with_hash_mut(|hash| {
         with_pool_mut(|pool| {
             let res = pool.lookup_str_insert(hash, b".aux", StrIlk::FileExt)?;
             ctx.s_aux_extension = hash.text(res.loc);
@@ -436,9 +484,74 @@ pub unsafe extern "C" fn pre_def_certain_strings(ctx: *mut Bibtex) -> CResult {
             Ok(())
         })
     });
-    match res {
-        Ok(()) => CResult::Ok,
-        Err(BibtexError) => CResult::Error,
+    res.into()
+}
+
+pub fn add_out_pool(
+    ctx: &mut Bibtex,
+    buffers: &mut GlobalBuffer,
+    pool: &StringPool,
+    str: StrNumber,
+) {
+    let str = pool.get_str(str);
+
+    while buffers.init(BufTy::Out) + str.len() > buffers.len() {
+        buffers.grow_all();
+    }
+
+    let out_offset = buffers.init(BufTy::Out);
+    buffers.copy_from(BufTy::Out, out_offset, str);
+    buffers.set_init(BufTy::Out, out_offset + str.len());
+
+    let mut unbreakable_tail = false;
+    while buffers.init(BufTy::Out) > MAX_PRINT_LINE && !unbreakable_tail {
+        let end_ptr = buffers.init(BufTy::Out);
+        let mut out_offset = MAX_PRINT_LINE;
+        let mut break_pt_found = false;
+
+        while LexClass::of(buffers.at(BufTy::Out, out_offset)) != LexClass::Whitespace
+            && out_offset >= MIN_PRINT_LINE
+        {
+            out_offset -= 1;
+        }
+
+        if out_offset == MIN_PRINT_LINE - 1 {
+            out_offset = MAX_PRINT_LINE + 1;
+            while out_offset < end_ptr {
+                if LexClass::of(buffers.at(BufTy::Out, out_offset)) != LexClass::Whitespace {
+                    out_offset += 1;
+                } else {
+                    break;
+                }
+            }
+
+            if out_offset == end_ptr {
+                unbreakable_tail = true;
+            } else {
+                break_pt_found = true;
+                while out_offset + 1 < end_ptr {
+                    if LexClass::of(buffers.at(BufTy::Out, out_offset + 1)) == LexClass::Whitespace
+                    {
+                        out_offset += 1;
+                    } else {
+                        break;
+                    }
+                }
+            }
+        } else {
+            break_pt_found = true;
+        }
+
+        if break_pt_found {
+            buffers.set_init(BufTy::Out, out_offset);
+            let break_ptr = buffers.init(BufTy::Out) + 1;
+            output_bbl_line(ctx, buffers);
+            buffers.set_at(BufTy::Out, 0, b' ');
+            buffers.set_at(BufTy::Out, 1, b' ');
+            let len = end_ptr - break_ptr;
+            buffers.copy_within(BufTy::Out, BufTy::Out, break_ptr, 2, len);
+            buffers.set_init(BufTy::Out, len + 2);
+        }
     }
 }
 
