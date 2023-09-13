@@ -85,6 +85,10 @@ pub struct CompileOptions {
     #[structopt(name = "outdir", short, long, parse(from_os_str))]
     outdir: Option<PathBuf>,
 
+    /// Automatically create the output directory if it doesn't exist and outdir is specified
+    #[structopt(name = "outdir-create", long, short = "-O", requires("outdir"))]
+    outdir_create: bool,
+
     /// Input is untrusted -- disable all known-insecure features
     #[structopt(long)]
     untrusted: bool,
@@ -168,12 +172,28 @@ impl CompileOptions {
         }
 
         if let Some(output_dir) = self.outdir {
-            if !output_dir.is_dir() {
+            if output_dir.is_file() {
+                return Err(errmsg!(
+                    "output directory \"{}\" is a file, not a directory",
+                    &output_dir.display()
+                ));
+            } else if !output_dir.exists() && !self.outdir_create {
                 return Err(errmsg!(
                     "output directory \"{}\" does not exist",
-                    output_dir.display()
+                    &output_dir.display()
                 ));
             }
+
+            if self.outdir_create {
+                if let Some(create_dir_error) = std::fs::create_dir(&output_dir).err() {
+                    return Err(errmsg!(
+                        "failed to create output directory at \"{}\", error: {}",
+                        &output_dir.display(),
+                        create_dir_error
+                    ));
+                }
+            }
+
             sess_builder.output_dir(output_dir);
         }
 
